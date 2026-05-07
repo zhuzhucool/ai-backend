@@ -1,8 +1,11 @@
 from fastapi import Depends, FastAPI
-
-app = FastAPI()
 from pydantic import BaseModel
+from app.core import config
+app = FastAPI()
 
+settings = config.Settings()
+
+print(settings)
 # 定义请求体数据模型
 class Item(BaseModel):
     name: str
