@@ -1,6 +1,6 @@
 import os
 from sqlmodel import Session, create_engine
-from sqlalchemy import text
+from sqlalchemy import text, func
 from app.core.config import settings
 
 DATABASE_URL = settings.DATABASE_URL

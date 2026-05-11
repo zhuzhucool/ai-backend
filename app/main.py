@@ -19,6 +19,11 @@ from io import BytesIO
 from pypdf import PdfReader
 from docx import Document as DocxDocument
 import openpyxl
+from datetime import datetime
+from fastapi import Query
+from sqlalchemy import func
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -65,6 +70,11 @@ class DocumentUploadResponse(BaseModel):
     filename: str
     status: str
 
+class DocumentResponse(BaseModel):
+    id: int
+    filename: str
+    status: str
+    created_at: datetime
 
 
 def extract_text_from_bytes(content: bytes, ext: str) -> str:
@@ -93,8 +103,35 @@ def extract_text_from_bytes(content: bytes, ext: str) -> str:
     
 
 
-# @app.get("/documents")
-# async def chat_documents():
+@app.get("/documents", response_model=dict)
+async def list_documents(
+    user_id: int,
+    db: Session = Depends(get_session),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0)
+):
+    if user_id == None:
+        return {"user_id": user_id, "error" : "当前user_id不存在"}
+    # 查总数
+    stmt = (
+        select(func.count(Document.id))
+        .where(Document.user_id == user_id)
+    )
+    total = db.exec(stmt).one()
+
+    stmt = (
+        select(ChatMessage)
+        .where(Document.user_id == user_id)
+        .order_by(Document.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    documents = db.exec(stmt).all()
+
+    return {
+        "total": total,
+        "documents": documents
+    }
 
 
 @app.get("/health")
