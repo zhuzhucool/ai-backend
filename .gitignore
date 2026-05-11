@@ -28,6 +28,7 @@ uploads/
 # 日志文件
 *.log
 logs/
+temp/
 
 # 数据库文件，如果你本地用了 sqlite
 *.sqlite3
