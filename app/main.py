@@ -180,7 +180,7 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session), user_id: st
         success = True
     except llm.LLMError as e:
         error_message = e.message
-        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+        http_error = HTTPException(status_code=e.status_code, detail=e.message)
     finally:
         latency_ms = int((time.perf_counter() - start) * 1000)
 
@@ -199,6 +199,9 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session), user_id: st
     # 写入
     db.add(log)
     db.commit()
+
+    if http_error:
+        raise http_error 
 
     assistant_content = response.choices[0].message.content
     assistant_message = ChatMessage(
