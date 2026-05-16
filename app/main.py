@@ -1,4 +1,4 @@
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 from app.core import config
 from app.services import llm
@@ -22,6 +22,8 @@ import openpyxl
 from datetime import datetime
 from fastapi import Query
 from sqlalchemy import func
+from app.utils.common import verify_api_key, get_current_user_id
+import logging
 
 
 
@@ -48,9 +50,8 @@ class Item(BaseModel):
     price: float
     tax: float | None = None
 class ChatRequest(BaseModel):
-    user_id: int
     message: str 
-    session_id: int = "123"
+    session_id: int = 123
     temperature: float = Field(ge=0.0, le=2.0)
     max_tokens: int = Field(ge=1, le=1024*3)
 
@@ -138,10 +139,18 @@ async def list_documents(
 async def chat_health():
     return {"status": "ok", "service" : "ai-backend"}
 
+# def verify_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+#     if x_api_key != "dev-secret-zhuzhucool":
+#         raise HTTPException(status_code=401, detail="Invalid API key")
+
+# def get_current_user_id(
+#     x_user_id: str = Header(alias="X-User-Id"),
+# ) -> str:
+#     return x_user_id
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, db: Session = Depends(get_session)):
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
+async def chat(req: ChatRequest, db: Session = Depends(get_session), user_id: str = Depends(get_current_user_id)):
     # TODO: 后面补事务、失败日志、Redis 限流/缓存、异步任务队列
     if not req.message.strip():
         raise HTTPException(status_code=400, detail={
@@ -151,7 +160,7 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session)):
     
     user_message = ChatMessage(
         session_id=req.session_id,
-        user_id=req.user_id,
+        user_id=user_id,
         content=req.message,
         role="user"
     )
@@ -167,8 +176,7 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session)):
     response = None
 
     try:
-
-        response = llm.llm_chat(req.message, req.temperature, req.max_tokens)
+        response = await llm.llm_chat(req.message, req.temperature, req.max_tokens)
         success = True
     except llm.LLMError as e:
         error_message = e.message
@@ -178,7 +186,7 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session)):
 
     # 组装日志
     log = LLMLog(
-        user_id=req.user_id,
+        user_id=user_id,
         session_id=req.session_id,
         model=settings.OPENAI_MODEL,
         prompt_tokens=response.usage.prompt_tokens if response and response.usage else 0,
@@ -195,7 +203,7 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session)):
     assistant_content = response.choices[0].message.content
     assistant_message = ChatMessage(
         session_id=req.session_id,
-        user_id=req.user_id,
+        user_id=user_id,
         content=assistant_content,
         role="assistant"
     )
@@ -214,23 +222,27 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session)):
                         )
     return result
 
-@app.get("/sessions/{session_id}/messages")
-async def get_message(session_id: int, db: Session = Depends(get_session)):
+@app.get("/sessions/{session_id}/messages", dependencies=[Depends(verify_api_key)])
+async def get_message(session_id: int, db: Session = Depends(get_session), user_id: str = Depends(get_current_user_id)):
     if session_id == None:
-        return {"session_id": session_id, "error" : "当前session_id不存在"}
+        raise HTTPException(status_code=400, detail={
+            "error": "bad_request",
+            "session_id": "session_id 不能为空"
+            })
     sql = (
         select(ChatMessage)
-        .where(ChatMessage.session_id == session_id)
+        .where(ChatMessage.session_id == session_id, ChatMessage.user_id == user_id)
         .order_by(ChatMessage.created_at)
     )
     messages = db.exec(sql).all()
     return {"session_id": session_id, "messages" : messages}
     
-@app.post("/documents/upload", response_model=DocumentUploadResponse)
+@app.post("/documents/upload", response_model=DocumentUploadResponse, dependencies=[Depends(verify_api_key)])
 async def upload_document(
-    user_id: int,
     file: UploadFile,
-    db: Session = Depends(get_session)):
+    db: Session = Depends(get_session),
+    user_id: str = Depends(get_current_user_id)
+    ):
 
     # todo 优化pdf解析速度
 
@@ -297,6 +309,77 @@ async def upload_document(
         filename=document.filename,
         status=document.status
     )
+
+@app.post("/knowledge/query", dependencies=[Depends(verify_api_key)])
+async def knowledge_query(messages: str, document_id: int, db: Session = Depends(get_session), user_id: str = Depends(get_current_user_id)):
+    if document_id == None:
+        raise HTTPException(status_code=400, detail={
+            "error": "bad_request",
+            "document_id": "document_id 不能为空"
+            })
+    sql = (
+        select(Document)
+        .where(Document.id == document_id, Document.user_id == user_id)
+    )
+    document = db.exec(sql).first()
+    if document is None:
+        raise HTTPException(status_code=404, detail={
+            "error": "not_found",
+            "document_id": "文档不存在"
+        })
+
+
+    #日志记录
+    start = time.perf_counter()
+    response = None
+
+    try:
+        response = await llm.llm_chat(messages + "\n\n" +document.text_content, 0.7, 1024)
+
+    except llm.LLMError as e:
+        error_message = e.message
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    finally:
+        latency_ms = int((time.perf_counter() - start) * 1000)
+
+    return {"answer": response.choices[0].message.content,
+             "sources": [{
+                "document_id": document_id,
+                "filename": document.filename,
+             }] 
+            }
+
+logger = logging.getLogger("app.request")
+logging.basicConfig(level=logging.INFO)
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.exception(
+            "request failed method=%s path=%s duration_ms=%.2f error=%s",
+            request.method,
+            request.url.path,
+            duration_ms,
+            str(exc),
+        )
+        raise
+
+    duration_ms = (time.perf_counter() - start) * 1000
+
+    logger.info(
+        "request completed method=%s path=%s status_code=%s duration_ms=%.2f",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+
+    return response
+
 # unset OPENAI_API_KEY OPENAI_MODEL OPENAI_BASE_URL DATABASE_URL API_KEY APP_NAME ENV
 
 #uvicorn app.main:app --reload --port 18001
