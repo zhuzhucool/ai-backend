@@ -174,12 +174,14 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session), user_id: st
     success = False
     error_message = None
     response = None
-
+    http_error = None
+    llm_error = None
     try:
         response = await llm.llm_chat(req.message, req.temperature, req.max_tokens)
         success = True
     except llm.LLMError as e:
         error_message = e.message
+        llm_error = e
         http_error = HTTPException(status_code=e.status_code, detail=e.message)
     finally:
         latency_ms = int((time.perf_counter() - start) * 1000)
@@ -201,7 +203,7 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session), user_id: st
     db.commit()
 
     if http_error:
-        raise http_error 
+        raise http_error from llm_error
 
     assistant_content = response.choices[0].message.content
     assistant_message = ChatMessage(
