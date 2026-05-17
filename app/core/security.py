@@ -1,4 +1,4 @@
-from fastapi import Depends, FastAPI, HTTPException, Header
+from fastapi import HTTPException, Header
 
 def verify_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
     if x_api_key != "dev-secret-zhuzhucool":
