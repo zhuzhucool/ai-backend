@@ -22,7 +22,7 @@ from app.models.document_embedding import DocumentEmbedding
 logger = logging.getLogger(__name__)
 
 settings = config.Settings()
-router = APIRouter()
+router = APIRouter(tags=["Documents"])
 UPLOAD_DIR = Path("uploads")
 ALLOWED_EXTENSIONS = (".txt", ".pdf", ".docx", ".xlsx")
 MAX_SIZE = 20 * 1024 * 1024  # 20MB

@@ -13,7 +13,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 settings = config.Settings()
-router = APIRouter()
+router = APIRouter(tags=["Knowledge"])
 
 RAG_PROMPT = """你是一个文档问答助手。请严格根据以下参考资料回答用户问题。
 规则：

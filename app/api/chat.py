@@ -11,10 +11,16 @@ from app.core import config
 from app.models.chat_message import ChatMessage
 
 settings = config.Settings()
-router = APIRouter()
+router = APIRouter(tags=["Chat"])
 
 
-@router.post("/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
+@router.post(
+    "/chat",
+    response_model=ChatResponse,
+    dependencies=[Depends(verify_api_key)],
+    summary="聊天对话",
+    description="接收用户消息，调用 LLM 生成回复，并保存用户消息、助手回复和模型调用日志。",
+)
 async def chat(req: ChatRequest, db: Session = Depends(get_session), user_id: str = Depends(get_current_user_id)):
     # TODO: 后面补事务、失败日志、Redis 限流/缓存、异步任务队列
     if not req.message.strip():
