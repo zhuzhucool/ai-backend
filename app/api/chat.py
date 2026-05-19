@@ -8,6 +8,7 @@ from app.core.security import verify_api_key, get_current_user_id
 from app.models.llm_log import LLMLog
 from app.services import llm
 from app.core import config
+from app.models.chat_message import ChatMessage
 
 settings = config.Settings()
 router = APIRouter()

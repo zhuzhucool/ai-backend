@@ -75,3 +75,32 @@ class VectorStore:
 
         return items
 
+    def keyword_search(self, keyword: str, owner_id: int, top_k: int = 5) -> list[dict]:
+        with Session(self.engine) as session:
+            rows = session.exec(
+                text("""
+                    SELECT
+                        chunk_text,
+                        source_file,
+                        page_number,
+                        section_title,
+                        1.0 AS similarity
+                    FROM document_embeddings
+                    WHERE owner_id = :oid
+                    AND chunk_text ILIKE :keyword
+                    LIMIT :k
+                """).bindparams(
+                    oid=owner_id,
+                    keyword=f"%{keyword}%",
+                    k=top_k,
+                )
+            ).all()
+
+        return [{
+            "text": row.chunk_text,
+            "source_file": row.source_file,
+            "page_number": row.page_number,
+            "section_title": row.section_title,
+            "similarity": round(row.similarity, 4),
+            "low_confidence": False,
+        } for row in rows]

@@ -29,12 +29,14 @@
   - 支持 `.txt`、`.pdf`、`.docx`、`.xlsx`
   - 限制文件大小
   - 保存文件信息到数据库
-  - 提取文本内容
+  - 解析、切分并写入向量库
+  - 索引成功后文档状态为 `indexed`
 - 文档列表 `/documents`
   - 按 `user_id` 查询文档
 - 知识库问答 `/knowledge/query`
-  - 根据 `document_id` 查询文档
-  - 查询时校验 `user_id`
+  - 使用关键词检索和向量检索召回文档片段
+  - 低置信度时返回未找到相关内容
+  - 记录检索日志到 `retrieval_logs`
 - 请求日志
   - 记录请求方法
   - 记录请求路径
@@ -74,6 +76,11 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_KEY=your-api-key-here
 OPENAI_MODEL=gpt-4o-mini
 
+EMBEDDING_KEY=your-embedding-key-here
+EMBEDDING_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+EMBEDDING_MODEL=text-embedding-v4
+EMBEDDING_DIM=1024
+
 DATABASE_URL=postgresql://postgres:password@localhost:5432/ai_backend
 API_KEY=dev-secret-key
 ```
@@ -86,7 +93,11 @@ API_KEY=dev-secret-key
 | `ENV` | 运行环境 | `dev` |
 | `OPENAI_BASE_URL` | OpenAI 兼容接口地址 | `https://api.openai.com/v1` |
 | `OPENAI_API_KEY` | 模型服务 API Key | `your-api-key-here` |
-| `OPENAI_MODEL` | 模型名称 | `gpt-4o-mini` |
+| `OPENAI_MODEL` | 对话模型名称 | `gpt-4o-mini` |
+| `EMBEDDING_KEY` | Embedding 服务 API Key | `your-embedding-key-here` |
+| `EMBEDDING_URL` | OpenAI 兼容 Embedding 接口地址 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `EMBEDDING_MODEL` | Embedding 模型名称 | `text-embedding-v4` |
+| `EMBEDDING_DIM` | Embedding 向量维度 | `1024` |
 | `DATABASE_URL` | PostgreSQL 连接地址 | `postgresql://postgres:password@localhost:5432/ai_backend` |
 | `API_KEY` | 本项目接口鉴权 Key | `dev-secret-key` |
 
@@ -140,6 +151,12 @@ API_KEY=dev-secret-key
 
 ```sql
 CREATE DATABASE ai_backend;
+```
+
+安装 pgvector 扩展：
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
 确认 `.env` 中的 `DATABASE_URL` 指向这个数据库。
@@ -231,25 +248,56 @@ curl "http://127.0.0.1:18001/sessions/123/messages" \
 
 ### 上传文档
 
+上传接口会保存原文件，创建文档记录，并同步完成解析、切分、Embedding 和向量库写入。返回的 `status` 为 `indexed` 时，文档可用于知识库问答。
+
 ```bash
 curl -X POST "http://127.0.0.1:18001/documents/upload" \
-  -H "X-API-Key: dev-secret-key" \
   -H "X-User-Id: 1" \
-  -F "file=@./example.txt"
+  -F "file=@./example.pdf"
+```
+
+预期返回：
+
+```json
+{
+  "document_id": 1,
+  "filename": "example.pdf",
+  "status": "indexed",
+  "chunks_count": 12
+}
 ```
 
 ### 查询文档列表
 
 ```bash
 curl "http://127.0.0.1:18001/documents?user_id=1&limit=20&offset=0" \
-  -H "X-API-Key: dev-secret-key" \
+  -H "X-User-Id: 1"
+```
+
+### 删除文档
+
+删除接口会校验当前用户，只允许删除自己的文档，并同步删除对应的向量分片记录。
+
+```bash
+curl -X DELETE "http://127.0.0.1:18001/documents/1" \
+  -H "X-User-Id: 1"
+```
+
+### 知识库检索
+
+只返回检索命中的文档片段，不调用 LLM。
+
+```bash
+curl -X POST "http://127.0.0.1:18001/knowledge/search?query=楼国强是谁&top_k=5" \
   -H "X-User-Id: 1"
 ```
 
 ### 知识库问答
 
+问答接口会先做关键词和向量混合检索，低置信度时返回未找到相关内容；命中资料后再调用 LLM 生成回答。
+
 ```bash
-curl -X POST "http://127.0.0.1:18001/knowledge/query?messages=请总结这个文档&document_id=1" \
+curl -X POST "http://127.0.0.1:18001/knowledge/query?query=楼国强是谁&top_k=5" \
   -H "X-API-Key: dev-secret-key" \
   -H "X-User-Id: 1"
 ```
@@ -282,7 +330,38 @@ curl -X POST "http://127.0.0.1:18001/knowledge/query?messages=请总结这个文
 | `content_type` | 文件类型 |
 | `size` | 文件大小 |
 | `status` | 文档状态 |
-| `text_content` | 提取出的文本内容 |
+| `text_content` | 保留字段，RAG 正文存入 `document_embeddings` |
+| `created_at` | 创建时间 |
+
+### document_embeddings
+
+保存文档切分后的向量分片。
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | 主键 |
+| `doc_id` | 文档 ID |
+| `owner_id` | 用户 ID |
+| `chunk_text` | 分片文本 |
+| `chunk_index` | 分片序号 |
+| `source_file` | 来源文件 |
+| `page_number` | 页码 |
+| `section_title` | 小节标题 |
+| `embedding` | 向量数据 |
+
+### retrieval_logs
+
+保存知识库检索日志，用于排查和优化 RAG 效果。
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | 主键 |
+| `user_id` | 用户 ID |
+| `query` | 用户问题 |
+| `top_k` | 请求返回的最大条数 |
+| `results_count` | 实际返回的检索结果数 |
+| `top_similarity` | 最高相似度 |
+| `latency_ms` | 检索耗时，单位毫秒 |
 | `created_at` | 创建时间 |
 
 ### llmlog

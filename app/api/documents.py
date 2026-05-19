@@ -1,21 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, Query, File
-from app.schemas.document import  DocumentUploadResponse
+from app.schemas.document import DocumentUploadResponse, DocumentListResponse, DocumentDeleteResponse
 from app.models.chat_message import ChatMessage
 from app.models.document import Document
-from app.db.session import get_session
+from app.db.session import get_session, engine
 from sqlmodel import Session, select
 from app.core.security import verify_api_key, get_current_user_id
 from app.core import config
 import time
 from pathlib import Path
-from io import BytesIO
-from pypdf import PdfReader
-from docx import Document as DocxDocument
-import openpyxl
 import uuid
 from sqlalchemy import func
-import tempfile, os
 from app.parsers import get_parser
+from app.rag.splitter import TextSplitter
+from app.rag.embedder import get_embedder
+from app.rag.vectorstore import VectorStore
+import logging
+from fastapi.concurrency import run_in_threadpool
+from sqlmodel import delete
+from app.models.document_embedding import DocumentEmbedding
+
+logger = logging.getLogger(__name__)
 
 settings = config.Settings()
 router = APIRouter()
@@ -23,130 +27,110 @@ UPLOAD_DIR = Path("uploads")
 ALLOWED_EXTENSIONS = (".txt", ".pdf", ".docx", ".xlsx")
 MAX_SIZE = 20 * 1024 * 1024  # 20MB
 
+@router.post(
+    "/documents/upload",
+    response_model=DocumentUploadResponse,
+    summary="上传文档并建立 RAG 索引",
+    description="保存上传文件，创建文档记录，解析文本并写入向量库。索引成功后 status 为 indexed。",
+)
+async def upload_document(file: UploadFile = File(...),
+                          db: Session = Depends(get_session),
+                          user_id: int = Depends(get_current_user_id)):
+    # 开发环境需要考虑事务
+    status = "uploaded"
+    # 1. 校验文件名
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
 
-def extract_text_from_bytes(content: bytes, ext: str) -> str:
-    if ext == ".txt":
-        return content.decode("utf-8")
+    # 2. 校验格式
+    if not file.filename.lower().endswith(ALLOWED_EXTENSIONS):
+        raise HTTPException(status_code=400, detail="仅支持 txt/pdf/docx/xlsx 格式")
 
-    elif ext == ".pdf":
-        reader = PdfReader(BytesIO(content))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    # 3. 读取内容并校验大小（用实际读取的字节判断，file.size 不一定可靠）
+    content = await file.read()
+    if len(content) > MAX_SIZE:
+        raise HTTPException(status_code=400, detail=f"文件大小超过限制（最大 {MAX_SIZE // 1024 // 1024}MB）")
 
-    elif ext == ".docx":
-        doc = DocxDocument(BytesIO(content))
-        return "\n".join(para.text for para in doc.paragraphs)
-
-    elif ext == ".xlsx":
-        wb = openpyxl.load_workbook(BytesIO(content), read_only=True)
-        rows = []
-        for sheet in wb.sheetnames:
-            for row in wb[sheet].iter_rows(values_only=True):
-                cells = [str(c) for c in row if c is not None]
-                if cells:
-                    rows.append(" | ".join(cells))
-        return "\n".join(rows)
-
-    return ""
-
-
-# @router.post("/documents/upload", response_model=DocumentUploadResponse, dependencies=[Depends(verify_api_key)])
-# async def upload_document(
-#     file: UploadFile,
-#     db: Session = Depends(get_session),
-#     user_id: str = Depends(get_current_user_id)
-#     ):
-
-#     # todo 优化pdf解析速度
-
-#     status = "uploaded"
-#     start = time.perf_counter()
-#     # 1. 校验文件名
-#     if not file.filename:
-#         raise HTTPException(status_code=400, detail="文件名不能为空")
-
-#     # 2. 校验格式
-#     if not file.filename.lower().endswith(ALLOWED_EXTENSIONS):
-#         raise HTTPException(status_code=400, detail="仅支持 txt/pdf/docx/xlsx 格式")
-
-#     # 3. 读取内容并校验大小（用实际读取的字节判断，file.size 不一定可靠）
-#     read_start = time.perf_counter()
-#     content = await file.read()
-#     read_ms = int((time.perf_counter() - read_start) * 1000)
-#     if len(content) > MAX_SIZE:
-#         raise HTTPException(status_code=400, detail=f"文件大小超过限制（最大 {MAX_SIZE // 1024 // 1024}MB）")
-
-#     # 4. 提取文本内容
-#     parse_start = time.perf_counter()
-#     text_content = None
-#     ext = Path(file.filename).suffix.lower()
-#     if ext in (".txt", ".pdf", ".docx", ".xlsx"):
-#         try:
-#             text_content = extract_text_from_bytes(content, ext)
-#         except Exception:
-#             text_content = None  # 提取失败不阻断上传
-#             status = "failed"
-#     parse_ms = int((time.perf_counter() - parse_start) * 1000)
-
-
-#     UPLOAD_DIR.mkdir(exist_ok=True) #若路径不存在则创建
-#     safe_filename = f"{uuid.uuid4().hex}_{Path(file.filename).name}" #避免文件名重复
-#     file_path = UPLOAD_DIR / safe_filename #避免文件名重复
+    # 4. 提取文本内容
+    text_content = None
+    UPLOAD_DIR.mkdir(exist_ok=True) #若路径不存在则创建
+    safe_filename = f"{uuid.uuid4().hex}_{Path(file.filename).name}" #避免文件名重复
+    file_path = UPLOAD_DIR / safe_filename #避免文件名重复
     
-#     #复制文件内容
-#     write_start = time.perf_counter()
-#     with file_path.open("wb") as buffer:
-#         buffer.write(content)
-#     write_ms = int((time.perf_counter() - write_start) * 1000)
+    #复制文件内容
 
-#     document = Document(
-#             user_id=user_id,
-#             filename=file.filename,
-#             file_path=str(file_path),
-#             content_type=file.content_type,
-#             size=len(content),
-#             text_content=text_content,
-#             status=status
-#         )
-#     #上传数据库并返回id
-#     db_start = time.perf_counter()
-#     db.add(document)
-#     db.commit()
-#     db.refresh(document)
-#     db_ms = int((time.perf_counter() - db_start) * 1000)
-#     total_ms = int((time.perf_counter() - start) * 1000)
-#     print(f"upload_document read={read_ms}ms parse={parse_ms}ms write={write_ms}ms db={db_ms}ms total={total_ms}ms file={file.filename}")
+    with file_path.open("wb") as buffer:
+        buffer.write(content)
 
-#     return DocumentUploadResponse(
-#         document_id=document.id,
-#         filename=document.filename,
-#         status=document.status
-#     )
-
-
-@router.post("/documents/upload")
-async def upload_document(file: UploadFile = File(...)):
-    # 1. 保存文件
-    with tempfile.NamedTemporaryFile(delete=False, suffix=file.filename) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    document = Document(
+            user_id=user_id,
+            filename=file.filename,
+            file_path=str(file_path),
+            content_type=file.content_type,
+            size=len(content),
+            text_content=text_content,
+            status=status
+        )
+    #上传数据库并返回id
+    db.add(document)
+    db.commit()
+    db.refresh(document)
     
-    # 2. 解析
-    parser = get_parser(file.filename)
-    chunks = parser.parse(tmp_path, file.filename)
-    
-    # 3. 清理临时文件
-    os.unlink(tmp_path)
-    
-    # 4. 返回结果（后续步骤会改成入库）
-    return {
-        "filename": file.filename,
-        "chunks_count": len(chunks),
-        "sample": chunks[0].text[:200] if chunks else "",
-        "chunks": chunks
-    }
+    try:
+        parser = get_parser(file.filename)
+        chunks = parser.parse(str(file_path), file.filename)
 
-@router.get("/documents", response_model=dict)
+        splitter = TextSplitter()
+        chunks = splitter.split(chunks)
+
+        vector_store = VectorStore(engine)
+        embedder = get_embedder()
+        batch_size = 10
+
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i+batch_size]
+            texts = [c.text for c in batch]
+            embeddings = await embedder.embed_texts(texts)
+
+            records = [{
+                "doc_id": document.id,
+                "owner_id": user_id,
+                "chunk_text": c.text,
+                "chunk_index": i + j,
+                "source_file": c.source_file,
+                "page_number": c.page_number,
+                "section_title": c.section_title,
+                "embedding": emb
+            } for j, (c, emb) in enumerate(zip(batch, embeddings))]
+
+            await run_in_threadpool(vector_store.add_embeddings, records)
+
+
+        document.status = "indexed"
+        db.add(document)
+        db.commit()
+
+    except Exception as exc:
+        logger.exception("document indexing failed document_id=%s filename=%s", document.id, file.filename)
+        document.status = "failed"
+        db.add(document)
+        db.commit()
+        raise HTTPException(status_code=500, detail="文档索引失败") from exc
+    
+    return DocumentUploadResponse(
+        document_id=document.id,
+        filename=document.filename,
+        status=document.status,
+        chunks_count=len(chunks),
+    )
+ 
+
+@router.get(
+    "/documents",
+    response_model=DocumentListResponse,
+    summary="查询文档列表",
+    description="按用户查询已上传文档，返回总数和分页后的文档列表。",
+)
 async def list_documents(
     user_id: int,
     db: Session = Depends(get_session),
@@ -163,7 +147,7 @@ async def list_documents(
     total = db.exec(stmt).one()
 
     stmt = (
-        select(ChatMessage)
+        select(Document)
         .where(Document.user_id == user_id)
         .order_by(Document.created_at.desc())
         .offset(offset)
@@ -175,3 +159,50 @@ async def list_documents(
         "total": total,
         "documents": documents
     }
+
+@router.delete(
+    "/documents/{document_id}",
+    response_model=DocumentDeleteResponse,
+    summary="删除文档",
+    description="只能删除当前用户自己的文档，并同步删除对应的向量分片记录。",
+)
+async def delete_document(
+    document_id: int,
+    db: Session = Depends(get_session),
+    user_id: int = Depends(get_current_user_id),
+):
+    document = db.exec(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == user_id,
+        )
+    ).first()
+
+    if document is None:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    # file_path = document.file_path  先不删
+
+    try:
+        db.exec(
+            delete(DocumentEmbedding).where(
+                DocumentEmbedding.doc_id == document.id,
+                DocumentEmbedding.owner_id == user_id,
+            )
+        )
+        db.exec(
+            delete(Document).where(
+                Document.id == document.id,
+                Document.user_id == user_id,
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return DocumentDeleteResponse(
+        document_id=document_id,
+        status="deleted",
+    )
+

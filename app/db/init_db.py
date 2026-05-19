@@ -5,6 +5,7 @@ from app.models.document import Document
 from app.models.chat_message import ChatMessage
 from app.models.llm_log import LLMLog
 from app.models.document_embedding import DocumentEmbedding
+from app.models.retrieval_log import RetrievalLog
 
 
 def init_db() -> None:

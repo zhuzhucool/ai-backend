@@ -47,7 +47,7 @@ class LLMError(Exception):
 #         except OpenAIError as e:
 #             raise LLMError("LLM 服务调用失败", 502) from e
 
-async def llm_chat(message: str, temperature: float, max_tokens: int):
+async def llm_chat(message: str, temperature: float = 0.7, max_tokens: int = 1024):
     last_error = None
 
     for attempt in range(len(RETRY_DELAYS) + 1):
