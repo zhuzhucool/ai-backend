@@ -9,7 +9,6 @@ from app.models.llm_log import LLMLog
 from app.services import llm
 from app.core import config
 from app.models.chat_message import ChatMessage
-
 settings = config.Settings()
 router = APIRouter(tags=["Chat"])
 
@@ -47,8 +46,9 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session), user_id: st
     response = None
     http_error = None
     llm_error = None
+    llmService = llm.LLMService(settings.API_KEY, settings.OPENAI_BASE_URL, settings.OPENAI_MODEL)
     try:
-        response = await llm.llm_chat(req.message, req.temperature, req.max_tokens)
+        response = await llmService.chat(req.message, req.temperature, req.max_tokens)
         success = True
     except llm.LLMError as e:
         error_message = e.message
