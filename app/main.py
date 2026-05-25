@@ -9,6 +9,7 @@ from app.api import chat
 from app.api import documents
 from app.api import knowledge
 from app.api import messages
+from app.api import agent_chat
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,6 +26,7 @@ app.include_router(chat.router)
 app.include_router(documents.router)
 app.include_router(knowledge.router)
 app.include_router(messages.router)
+app.include_router(agent_chat.router)
 
 
 

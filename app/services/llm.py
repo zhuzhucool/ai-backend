@@ -58,6 +58,7 @@ class LLMService:
 
                 return {
                     "content": message.content or "",
+                    "reasoning_content": getattr(message, "reasoning_content", None),
                     "tool_calls": [
                         {
                             "id": tool_call.id,
@@ -92,7 +93,7 @@ class LLMService:
 
             except APIStatusError as e:
                 if e.status_code not in (500, 502, 503, 504):
-                    raise LLMError(f"LLM 服务返回错误：{e.status_code}", 502) from e
+                    raise LLMError(f"LLM 服务返回错误：{e.status_code} - {e.response.text}", 502) from e
                 last_error = e
 
             except OpenAIError as e:

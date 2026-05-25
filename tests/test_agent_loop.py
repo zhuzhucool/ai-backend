@@ -37,6 +37,21 @@ class FakeMemory:
         })
 
 
+class FakeToolLogWriter:
+    def __init__(self, should_fail=False):
+        self.should_fail = should_fail
+        self.saved = []
+
+    async def save(self, session_id, tool_call):
+        if self.should_fail:
+            raise RuntimeError("tool log save failed")
+
+        self.saved.append({
+            "session_id": session_id,
+            "tool_call": tool_call,
+        })
+
+
 def build_registry():
     registry = ToolRegistry()
     registry.register(GetCurrentTimeTool())
@@ -116,7 +131,8 @@ async def test_run_calls_calculator_then_returns_answer():
             "tool_calls": None,
         },
     ])
-    agent = AgentLoop(llm, build_registry())
+    tool_log_writer = FakeToolLogWriter()
+    agent = AgentLoop(llm, build_registry(), tool_log_writer=tool_log_writer)
 
     result = await agent.run("计算 123*456+789", "session-1")
 
@@ -134,6 +150,16 @@ async def test_run_calls_calculator_then_returns_answer():
             "iteration": 1,
         }
     ]
+    assert len(tool_log_writer.saved) == 1
+    assert tool_log_writer.saved[0] == {
+        "session_id": "session-1",
+        "tool_call": {
+            "tool": "calculator",
+            "arguments": {"expression": "123*456+789"},
+            "result": json.dumps({"result": 56877}),
+            "iteration": 1,
+        },
+    }
     assert llm.calls[1]["messages"][-1] == {
         "role": "tool",
         "tool_call_id": "call_1",
@@ -176,7 +202,8 @@ async def test_run_stops_after_max_iterations():
         }
         for index in range(AgentLoop.MAX_ITERATIONS)
     ])
-    agent = AgentLoop(llm, build_registry())
+    memory = FakeMemory()
+    agent = AgentLoop(llm, build_registry(), memory)
 
     result = await agent.run("一直调用工具", "session-1")
 
@@ -187,6 +214,36 @@ async def test_run_stops_after_max_iterations():
     assert result["iterations"] == AgentLoop.MAX_ITERATIONS
     assert len(result["tool_calls"]) == AgentLoop.MAX_ITERATIONS
     assert len(llm.calls) == AgentLoop.MAX_ITERATIONS
+    assert memory.saved == [
+        {
+            "session_id": "session-1",
+            "user_message": "一直调用工具",
+            "answer": "抱歉，我尝试了多次但无法完成任务。",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_continues_when_tool_log_save_fails():
+    llm = FakeLLM([
+        {
+            "content": "",
+            "tool_calls": [tool_call("call_1", "calculator", {"expression": "1+1"})],
+        },
+        {
+            "content": "计算结果是 2。",
+            "tool_calls": None,
+        },
+    ])
+    tool_log_writer = FakeToolLogWriter(should_fail=True)
+    agent = AgentLoop(llm, build_registry(), tool_log_writer=tool_log_writer)
+
+    result = await agent.run("计算 1+1", "session-1")
+
+    assert result["answer"] == "计算结果是 2。"
+    assert result["iterations"] == 2
+    assert len(result["tool_calls"]) == 1
+    assert tool_log_writer.saved == []
 
 
 # @pytest.mark.asyncio

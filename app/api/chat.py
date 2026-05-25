@@ -46,9 +46,13 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session), user_id: st
     response = None
     http_error = None
     llm_error = None
-    llmService = llm.LLMService(settings.API_KEY, settings.OPENAI_BASE_URL, settings.OPENAI_MODEL)
+    llmService = llm.LLMService(settings.OPENAI_API_KEY, settings.OPENAI_BASE_URL, settings.OPENAI_MODEL)
     try:
-        response = await llmService.chat(req.message, req.temperature, req.max_tokens)
+        response = await llmService.chat(
+            messages=[{"role": "user", "content": req.message}],
+            temperature=req.temperature,
+            max_tokens=req.max_tokens,
+        )
         success = True
     except llm.LLMError as e:
         error_message = e.message
@@ -62,9 +66,9 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session), user_id: st
         user_id=user_id,
         session_id=req.session_id,
         model=settings.OPENAI_MODEL,
-        prompt_tokens=response.usage.prompt_tokens if response and response.usage else 0,
-        completion_tokens=response.usage.completion_tokens if response and response.usage else 0,
-        total_tokens=response.usage.total_tokens if response and response.usage else 0,
+        prompt_tokens=response.get("usage", {}).get("prompt_tokens", 0) if response else 0,
+        completion_tokens=response.get("usage", {}).get("completion_tokens", 0) if response else 0,
+        total_tokens=response.get("usage", {}).get("total_tokens", 0) if response else 0,
         latency_ms=latency_ms,
         success=success,
         error_message=error_message,
@@ -76,7 +80,7 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session), user_id: st
     if http_error:
         raise http_error from llm_error
 
-    assistant_content = response.choices[0].message.content
+    assistant_content = response.get("content", "")
     assistant_message = ChatMessage(
         session_id=req.session_id,
         user_id=user_id,
@@ -88,12 +92,12 @@ async def chat(req: ChatRequest, db: Session = Depends(get_session), user_id: st
     db.refresh(assistant_message) #把数据库生成的ID信息读回来
 
     result = ChatResponse(session_id=req.session_id,
-                          message=response.choices[0].message.content,
-                          model=settings.OPENAI_MODEL,
+                          message=assistant_content,
+                          model=response.get("model", settings.OPENAI_MODEL),
                           usage=Usage(
-                                prompt_tokens = response.usage.prompt_tokens,
-                                completion_tokens = response.usage.completion_tokens,
-                                total_tokens = response.usage.total_tokens
-                          )if response.usage else None
+                                prompt_tokens=response.get("usage", {}).get("prompt_tokens", 0),
+                                completion_tokens=response.get("usage", {}).get("completion_tokens", 0),
+                                total_tokens=response.get("usage", {}).get("total_tokens", 0)
+                          )if response.get("usage") else None
                         )
     return result
