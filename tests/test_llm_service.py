@@ -75,7 +75,7 @@ class TestLLMService:
     @pytest.mark.asyncio
     async def test_chat_passes_tools_and_returns_tool_calls(self):
         service = LLMService(
-            api_key="sk-5c23515e80c749bba6768a92e3ae7ff8",
+            api_key="扫你妈的key",
             base_url="https://api.deepseek.com/v1",
             model="deepseek-v4-flash",
         )

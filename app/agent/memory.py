@@ -16,7 +16,7 @@ class ConversationMemory:
         self.user_id = user_id
 
 
-    async def get_history(self, session_id: str, limit: int = 20) -> list:
+    async def get_history(self, session_id: int, limit: int = 20) -> list:
         sql = (
             select(ChatMessage)
             .where(
@@ -45,7 +45,7 @@ class ConversationMemory:
 
 
 
-    async def save(self, session_id: str, user_msg: str, assistant_msg: str):
+    async def save(self, session_id: int, user_msg: str, assistant_msg: str):
         user_message = ChatMessage(
             session_id=session_id,
             user_id=self.user_id,
@@ -71,5 +71,5 @@ class ConversationMemory:
 
 
     
-    async def update_summary(self, session_id: str):
+    async def update_summary(self, session_id: int):
         return None

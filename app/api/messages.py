@@ -15,7 +15,7 @@ router = APIRouter(tags=["Messages"])
     summary="查询会话消息",
     description="按会话 ID 查询当前用户的聊天历史，返回按创建时间排序的消息列表。",
 )
-async def get_message(session_id: int, db: Session = Depends(get_session), user_id: str = Depends(get_current_user_id)):
+async def get_message(session_id: int, db: Session = Depends(get_session), user_id: int = Depends(get_current_user_id)):
     if session_id == None:
         raise HTTPException(status_code=400, detail={
             "error": "bad_request",

@@ -9,6 +9,9 @@ from app.agent.tools.registry import ToolRegistry
 from app.agent.prompt import Prompt
 
 
+BIG_SESSION_ID = 1_748_440_000_123
+
+
 class FakeLLM:
     def __init__(self, responses):
         self.responses = responses
@@ -95,7 +98,7 @@ def pretty_agent_result(result):
 #     memory = FakeMemory()
 #     agent = AgentLoop(llm, build_registry(), memory)
 
-#     result = await agent.run("你好", "session-1")
+#     result = await agent.run("你好", BIG_SESSION_ID)
 
 #     print("Agent 直接回答结果:", result)
 
@@ -106,7 +109,7 @@ def pretty_agent_result(result):
 #     }
 #     assert memory.saved == [
 #         {
-#             "session_id": "session-1",
+#             "session_id": BIG_SESSION_ID,
 #             "user_message": "你好",
 #             "answer": "你好，我可以帮你处理问题。",
 #         }
@@ -134,7 +137,7 @@ async def test_run_calls_calculator_then_returns_answer():
     tool_log_writer = FakeToolLogWriter()
     agent = AgentLoop(llm, build_registry(), tool_log_writer=tool_log_writer)
 
-    result = await agent.run("计算 123*456+789", "session-1")
+    result = await agent.run("计算 123*456+789", BIG_SESSION_ID)
 
     print("Agent 计算工具结果:", result)
     print("=" * 50)
@@ -152,7 +155,7 @@ async def test_run_calls_calculator_then_returns_answer():
     ]
     assert len(tool_log_writer.saved) == 1
     assert tool_log_writer.saved[0] == {
-        "session_id": "session-1",
+        "session_id": BIG_SESSION_ID,
         "tool_call": {
             "tool": "calculator",
             "arguments": {"expression": "123*456+789"},
@@ -181,7 +184,7 @@ async def test_run_calls_calculator_then_returns_answer():
 #     ])
 #     agent = AgentLoop(llm, build_registry())
 
-#     result = await agent.run("现在几点", "session-1")
+#     result = await agent.run("现在几点", BIG_SESSION_ID)
 #     tool_result = json.loads(result["tool_calls"][0]["result"])
 #     print("=" * 50)
 #     print("Agent 时间工具结果:", result)
@@ -205,7 +208,7 @@ async def test_run_stops_after_max_iterations():
     memory = FakeMemory()
     agent = AgentLoop(llm, build_registry(), memory)
 
-    result = await agent.run("一直调用工具", "session-1")
+    result = await agent.run("一直调用工具", BIG_SESSION_ID)
 
     pretty_agent_result(result)
 
@@ -216,7 +219,7 @@ async def test_run_stops_after_max_iterations():
     assert len(llm.calls) == AgentLoop.MAX_ITERATIONS
     assert memory.saved == [
         {
-            "session_id": "session-1",
+            "session_id": BIG_SESSION_ID,
             "user_message": "一直调用工具",
             "answer": "抱歉，我尝试了多次但无法完成任务。",
         }
@@ -238,7 +241,7 @@ async def test_run_continues_when_tool_log_save_fails():
     tool_log_writer = FakeToolLogWriter(should_fail=True)
     agent = AgentLoop(llm, build_registry(), tool_log_writer=tool_log_writer)
 
-    result = await agent.run("计算 1+1", "session-1")
+    result = await agent.run("计算 1+1", BIG_SESSION_ID)
 
     assert result["answer"] == "计算结果是 2。"
     assert result["iterations"] == 2
@@ -269,7 +272,7 @@ async def test_run_continues_when_tool_log_save_fails():
 #     ])
 #     agent = AgentLoop(llm, build_registry())
 
-#     result = await agent.run("算一下", "session-1")
+#     result = await agent.run("算一下", BIG_SESSION_ID)
 
 #     print("Agent 工具参数错误结果:", result)
 

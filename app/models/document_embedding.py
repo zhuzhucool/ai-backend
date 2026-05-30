@@ -1,12 +1,12 @@
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, JSON
+from sqlalchemy import BigInteger, Column, Integer, JSON
 from sqlmodel import SQLModel, Field
 
 class DocumentEmbedding(SQLModel, table=True):
     __tablename__ = "document_embeddings"
-    id: int = Field(default=None, primary_key=True)
-    doc_id: int = Field(index=True)
-    owner_id: int = Field(index=True)
+    id: int = Field(default=None, sa_column=Column(Integer().with_variant(BigInteger, "postgresql"), primary_key=True))
+    doc_id: int = Field(sa_column=Column(BigInteger, nullable=False, index=True))
+    owner_id: int = Field(sa_column=Column(BigInteger, nullable=False, index=True))
     chunk_text: str
     chunk_index: int
     source_file: str

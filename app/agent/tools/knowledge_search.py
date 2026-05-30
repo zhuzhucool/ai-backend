@@ -1,4 +1,6 @@
 import json
+from decimal import Decimal
+
 from app.agent.tools.base import BaseTool
 from app.services.rag_service import RagService
 
@@ -13,10 +15,10 @@ class KnowledgeSearchTool(BaseTool):
         },
         "required": ["query"]
     }
-    
+
     def __init__(self, rag_service: RagService):
         self.rag = rag_service  # 注入阶段二的 RAG 服务
-    
+
     async def execute(self, arguments: dict) -> str:
         query = arguments["query"]
         top_k = arguments.get("top_k", 3)
@@ -27,7 +29,7 @@ class KnowledgeSearchTool(BaseTool):
                     "content": r.text,
                     "source": r.source_file,
                     "page": r.page_number,
-                    "score": r.similarity
+                    "score": float(r.similarity) if isinstance(r.similarity, Decimal) else r.similarity,
                 }
                 for r in results
             ]

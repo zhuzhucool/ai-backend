@@ -1,11 +1,14 @@
 from datetime import datetime, timedelta
 
 import pytest
+from sqlalchemy import BigInteger
 from sqlmodel import SQLModel, Session, create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.agent.memory import ConversationMemory, ConversationMemoryError
 from app.models.chat_message import ChatMessage
+
+BIG_SESSION_ID = 1_748_440_000_123
 
 
 @pytest.fixture
@@ -146,6 +149,44 @@ def db_session():
 #     ]
 
 
+@pytest.mark.asyncio
+async def test_save_and_get_history_accept_big_session_id(db_session):
+    memory = ConversationMemory(db_session, user_id=1)
+
+    await memory.save(
+        session_id=BIG_SESSION_ID,
+        user_msg="你好",
+        assistant_msg="你好，我可以帮你。",
+    )
+
+    history = await memory.get_history(session_id=BIG_SESSION_ID)
+    messages = db_session.exec(
+        select(ChatMessage).order_by(ChatMessage.created_at)
+    ).all()
+
+    print("大 session_id 保存结果:", [
+        {
+            "session_id": msg.session_id,
+            "user_id": msg.user_id,
+            "role": msg.role,
+            "content": msg.content,
+        }
+        for msg in messages
+    ])
+    print("大 session_id 读取历史:", history)
+
+    assert [message.session_id for message in messages] == [BIG_SESSION_ID, BIG_SESSION_ID]
+    assert history == [
+        {"role": "user", "content": "你好"},
+        {"role": "assistant", "content": "你好，我可以帮你。"},
+    ]
+
+
+def test_chat_message_session_and_user_ids_use_big_integer():
+    assert isinstance(ChatMessage.__table__.c.session_id.type, BigInteger)
+    assert isinstance(ChatMessage.__table__.c.user_id.type, BigInteger)
+
+
 class FailingCommitDb:
     def __init__(self):
         self.added = []
@@ -168,7 +209,7 @@ async def test_save_rolls_back_and_raises_memory_error_when_commit_fails():
 
     with pytest.raises(ConversationMemoryError) as exc_info:
         await memory.save(
-            session_id=100,
+            session_id=BIG_SESSION_ID,
             user_msg="你好",
             assistant_msg="你好，我可以帮你。",
         )

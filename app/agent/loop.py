@@ -18,7 +18,7 @@ class AgentLoop:
         self.memory = memory
         self.tool_log_writer = tool_log_writer
 
-    async def run(self, user_message: str, session_id: str) -> dict:
+    async def run(self, user_message: str, session_id: int) -> dict:
         system_prompt = Prompt.build_system_prompt()
         messages = [
             {"role": "system", "content": system_prompt},
@@ -104,7 +104,7 @@ class AgentLoop:
             "tool_calls": tool_calls,
         }
 
-    async def save_tool_log(self, session_id: str, tool_call_record: dict) -> None:
+    async def save_tool_log(self, session_id: int, tool_call_record: dict) -> None:
         if not self.tool_log_writer:
             return
 
