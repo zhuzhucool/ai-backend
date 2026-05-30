@@ -1,5 +1,4 @@
 from fastapi import FastAPI
-from app.core import config
 from contextlib import asynccontextmanager
 from app.db.session import check_database_connection
 from app.db.init_db import init_db
@@ -16,8 +15,6 @@ async def lifespan(app: FastAPI):
     check_database_connection()
     init_db()
     yield
-settings = config.Settings()
-print(settings)
 
 
 app = FastAPI(lifespan=lifespan)
